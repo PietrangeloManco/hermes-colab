@@ -18,5 +18,6 @@ jobs:
       - name: Offline tests (real local Jupyter kernel as the runtime)
         run: |
           uv venv
-          uv pip install "httpx>=0.27,<1" "websockets>=13,<16" "pytest>=8,<9" "jupyter_server>=2.14,<3" "ipykernel>=6.29,<8" "fastapi>=0.110,<1"
+          # Release quarantine for test dependencies (catalog rule 10): nothing published in the last 3 days.
+          uv pip install --exclude-newer "$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" "httpx>=0.27,<1" "websockets>=13,<16" "pytest>=8,<9" "jupyter_server>=2.14,<3" "ipykernel>=6.29,<8" "fastapi>=0.110,<1"
           uv run --no-project python -m pytest tests -q

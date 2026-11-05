@@ -134,7 +134,17 @@ capped by `max_upload_mb` (default 512 MB) and output files above `max_sync_mb`
 - **Cost:** runtimes consume your Colab compute units like the web UI does. Runtimes are
   released when a run ends unless you pass `keep_runtime`. The estimate in
   `colab_status` uses the rates in settings; check your plan for current rates.
-- **Background work:** a daemon thread supervises active runs while Hermes is running.
+- **Code runs on your Colab runtime:** the plugin uploads a small runner (`remote/runner.py`,
+  standard library only) next to your code and starts it detached; it `pip install`s the
+  run's requirements there (plus `papermill` for notebooks). Nothing runs on your machine
+  except the plugin itself.
+- **Background work:** a daemon thread supervises active runs while Hermes is running
+  (one per profile, coordinated through a lease in the run store).
+- **Local data:** run records live in SQLite under the profile's plugin data directory
+  (`plugin-data/hermes-colab/runs.db`); logs and outputs in the run folder you see in
+  `colab_status`. No credentials are stored by the plugin.
+- **Chat context:** a `pre_llm_call` hook adds a one-line summary of a finished run to the
+  next turn of the chat that started it, once.
 
 ## Development
 
