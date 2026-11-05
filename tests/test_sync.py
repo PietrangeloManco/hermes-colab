@@ -63,3 +63,15 @@ def test_outputs_sync_in_write_order(tmp_path):
     listing = [["state.json", 1, 1005.0], ["model.pt", 1, 1001.0], ["metrics.csv", 1, 1003.0]]
     sup._sync(store.get("r"), client, listing, final=False, now=1010.0)
     assert client.downloads == ["/vm/r/outputs/model.pt", "/vm/r/outputs/metrics.csv", "/vm/r/outputs/state.json"]
+
+
+def test_failure_line_names_the_exception(tmp_path):
+    from hermes_colab.supervisor import _failure_line
+
+    log = tmp_path / "run.log"
+    log.write_text("epoch 1\nTraceback (most recent call last):\n  File \"t.py\", line 3\n"
+                   "ImportError: Found an incompatible version of torchao.\n")
+    assert _failure_line(log) == "ImportError: Found an incompatible version of torchao."
+    log.write_text("about to fail\n")
+    assert _failure_line(log) == "about to fail"
+    assert _failure_line(tmp_path / "missing.log") == ""

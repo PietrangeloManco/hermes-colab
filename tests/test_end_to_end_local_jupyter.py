@@ -191,6 +191,7 @@ def test_failing_script_reports_exit_code(jupyter, tmp_path):
     run_id = json.loads(tools.colab_run({"path": "boom.py"}))["run"]["id"]
     run = _drive(supervisor, store, run_id, until=lambda r: r["state"] in ("succeeded", "failed"))
     assert run["state"] == "failed" and run["exit_code"] == 3
+    assert run["error"] == "exit code 3: about to fail"
     assert "about to fail" in json.loads(tools.colab_logs({"run": run_id}))["lines"][-1] or \
         "about to fail" in "\n".join(json.loads(tools.colab_logs({"run": run_id}))["lines"])
 

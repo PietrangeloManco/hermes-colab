@@ -1,2 +1,3 @@
-peft>=0.13,<1
+# peft 0.19+ refuses the torchao 0.10 that Colab ships; keep below until Colab updates it.
+peft>=0.13,<0.19
 datasets>=3,<5

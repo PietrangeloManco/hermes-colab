@@ -13,8 +13,10 @@ and a run keeps being supervised after the process that started it exits.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -185,8 +187,13 @@ class Supervisor:
         if finished:
             code = status.get("exit_code")
             ok = code == 0
-            self._finish(run, "succeeded" if ok else "failed", exit_code=code,
-                         error=None if ok else (status.get("error") or f"exit code {code}"))
+            error = None
+            if not ok:
+                error = status.get("error") or f"exit code {code}"
+                cause = _failure_line(Path(run["local_dir"]) / "run.log")
+                if cause:
+                    error = f"{error}: {cause}"
+            self._finish(run, "succeeded" if ok else "failed", exit_code=code, error=error)
         elif not status and state.get("runner_err"):
             self._finish(run, "failed", error="runner did not start: " + state["runner_err"][-500:])
 
@@ -356,6 +363,23 @@ class Supervisor:
                 logger.exception("hermes-colab: completion notification failed")
 
 
+_ERROR_LINE = re.compile(r"^\s*(\w+(Error|Exception|Interrupt)|AssertionError|Killed|CUDA out of memory)\b")
+
+
+def _failure_line(log: Path) -> str:
+    """The line that explains a failed job (last exception line of the log), trimmed for chat."""
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 32 * 1024))
+            lines = [ln.strip() for ln in fh.read().decode("utf-8", "replace").splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    hits = [ln for ln in lines if _ERROR_LINE.match(ln) or "out of memory" in ln]
+    line = hits[-1] if hits else (lines[-1] if lines else "")
+    return line[:300]
+
+
 class SupervisorThread:
     """Daemon loop with a store lease; started on demand, exits when no run is active."""
 
@@ -367,6 +391,14 @@ class SupervisorThread:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._atexit = False
+
+    def _release_on_exit(self) -> None:
+        try:
+            with self.home_scope():
+                self.supervisor.store.release_lease(self.owner)
+        except Exception:
+            pass
 
     def ensure_running(self) -> None:
         with self._lock:
@@ -375,6 +407,9 @@ class SupervisorThread:
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="hermes-colab-supervisor", daemon=True)
             self._thread.start()
+            if not self._atexit:
+                atexit.register(self._release_on_exit)  # a restarted Hermes takes over at once
+                self._atexit = True
 
     def stop(self) -> None:
         self._stop.set()
