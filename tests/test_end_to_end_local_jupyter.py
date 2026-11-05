@@ -65,6 +65,11 @@ def test_kernel_roundtrip(jupyter, tmp_path):
     blob = os.urandom(3 * 1024 * 1024 + 17)
     client.upload(f"{run_dir}/blob.bin", blob)
     assert client.download(f"{run_dir}/blob.bin", len(blob)) == blob
+    assert client.connections == 1  # one kernel websocket for every call
+    client._ws.close()  # the kept socket goes stale between polls
+    assert client.execute("print('again')").strip() == "again"
+    assert client.connections == 2
+    client.close()
 
 
 class FakeTunnel:

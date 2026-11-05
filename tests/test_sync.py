@@ -53,3 +53,13 @@ def test_unsafe_paths_and_oversized_files_are_skipped(tmp_path):
     sup._sync(store.get("r"), client, listing, final=True, now=100.0)
     assert client.downloads == []
     assert store.get("r")["synced"]["huge.bin"][0] == "skipped"
+
+
+def test_outputs_sync_in_write_order(tmp_path):
+    """Weights written before the progress file reach home first, so a resume never pairs a newer
+    progress file with older weights."""
+    sup, store, run = _setup(tmp_path)
+    client = FakeClient()
+    listing = [["state.json", 1, 1005.0], ["model.pt", 1, 1001.0], ["metrics.csv", 1, 1003.0]]
+    sup._sync(store.get("r"), client, listing, final=False, now=1010.0)
+    assert client.downloads == ["/vm/r/outputs/model.pt", "/vm/r/outputs/metrics.csv", "/vm/r/outputs/state.json"]

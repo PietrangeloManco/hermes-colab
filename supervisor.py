@@ -235,7 +235,9 @@ class Supervisor:
         out_dir = Path(run["local_dir"]) / "outputs"
         remote = client.run_dir(run["id"]) + "/outputs"
         changed = False
-        for rel, size, mtime in listing:
+        # Oldest first: a job that writes its weights and then its progress file never has the
+        # progress file arrive home ahead of the weights it describes.
+        for rel, size, mtime in sorted(listing, key=lambda item: float(item[2])):
             rel_path = PurePosixPath(rel)
             if rel_path.is_absolute() or ".." in rel_path.parts:
                 continue

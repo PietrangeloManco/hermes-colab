@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -48,6 +49,9 @@ class RuntimeClient:
         self._ws_connect = ws_connect
         self._kernel_id: str | None = None
         self._session = uuid.uuid4().hex
+        self._ws = None
+        self._ws_lock = threading.Lock()
+        self.connections = 0
 
     # ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
@@ -88,59 +92,87 @@ class RuntimeClient:
         return connect(url, additional_headers=self._headers(), open_timeout=30, max_size=None,
                        ping_interval=20, ping_timeout=20)
 
-    def execute(self, code: str, *, timeout: float = 120.0) -> str:
-        """Run *code* in the runtime's kernel; return its stdout. Raises KernelError on an exception."""
+    def _open(self):
+        """The kernel websocket, opened once and reused: a fresh dial through the Colab proxy costs
+        seconds, which made a poll that copies a checkpoint home take a minute."""
+        if self._ws is not None:
+            return self._ws
         kernel = self.kernel_id()
         base = self.runtime.url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         url = f"{base}/api/kernels/{kernel}/channels?" + urlencode({"session_id": self._session, **self._params()})
-        msg_id = uuid.uuid4().hex
-        request = {
-            "header": {"msg_id": msg_id, "username": "hermes", "session": self._session,
-                       "msg_type": "execute_request", "version": "5.3",
-                       "date": datetime.now(UTC).isoformat()},
-            "parent_header": {}, "metadata": {}, "channel": "shell", "buffers": [],
-            "content": {"code": code, "silent": False, "store_history": False, "user_expressions": {},
-                        "allow_stdin": False, "stop_on_error": True},
-        }
-        out: list[str] = []
-        error: str | None = None
-        deadline = time.monotonic() + timeout
         try:
-            ws = self._connect(url)
+            self._ws = self._connect(url)
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", 0)
             if status in (401, 403, 404, 410):
                 self._kernel_id = None
                 raise RuntimeGone(f"kernel websocket refused with HTTP {status}") from None
             raise RuntimeUnreachable(f"kernel websocket: {type(exc).__name__}: {exc}") from None
-        try:
-            ws.send(json.dumps(request))
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RuntimeUnreachable(f"kernel did not finish within {int(timeout)}s")
-                try:
-                    raw = ws.recv(timeout=remaining)
-                except TimeoutError:
-                    raise RuntimeUnreachable(f"kernel did not finish within {int(timeout)}s") from None
-                except Exception as exc:
-                    raise RuntimeUnreachable(f"kernel websocket closed: {type(exc).__name__}") from None
-                msg = json.loads(raw)
-                if (msg.get("parent_header") or {}).get("msg_id") != msg_id:
-                    continue
-                kind = (msg.get("header") or {}).get("msg_type") or msg.get("msg_type")
-                content = msg.get("content") or {}
-                if kind == "stream" and content.get("name") == "stdout":
-                    out.append(content.get("text", ""))
-                elif kind == "error":
-                    error = f"{content.get('ename')}: {content.get('evalue')}"
-                elif kind == "status" and content.get("execution_state") == "idle":
-                    break
-        finally:
+        self.connections += 1
+        return self._ws
+
+    def _drop_ws(self) -> None:
+        ws, self._ws = self._ws, None
+        if ws is not None:
             try:
                 ws.close()
             except Exception:
                 pass
+
+    def execute(self, code: str, *, timeout: float = 120.0) -> str:
+        """Run *code* in the runtime's kernel; return its stdout. Raises KernelError on an exception."""
+        with self._ws_lock:
+            msg_id = uuid.uuid4().hex
+            request = json.dumps({
+                "header": {"msg_id": msg_id, "username": "hermes", "session": self._session,
+                           "msg_type": "execute_request", "version": "5.3",
+                           "date": datetime.now(UTC).isoformat()},
+                "parent_header": {}, "metadata": {}, "channel": "shell", "buffers": [],
+                "content": {"code": code, "silent": False, "store_history": False, "user_expressions": {},
+                            "allow_stdin": False, "stop_on_error": True},
+            })
+            reused = self._ws is not None
+            ws = self._open()
+            try:
+                ws.send(request)
+            except Exception:
+                self._drop_ws()
+                if not reused:
+                    raise RuntimeUnreachable("kernel websocket closed while sending") from None
+                ws = self._open()  # the kept socket went stale between polls: dial once more
+                try:
+                    ws.send(request)
+                except Exception:
+                    self._drop_ws()
+                    raise RuntimeUnreachable("kernel websocket closed while sending") from None
+            out: list[str] = []
+            error: str | None = None
+            deadline = time.monotonic() + timeout
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeUnreachable(f"kernel did not finish within {int(timeout)}s")
+                    try:
+                        raw = ws.recv(timeout=remaining)
+                    except TimeoutError:
+                        raise RuntimeUnreachable(f"kernel did not finish within {int(timeout)}s") from None
+                    except Exception as exc:
+                        raise RuntimeUnreachable(f"kernel websocket closed: {type(exc).__name__}") from None
+                    msg = json.loads(raw)
+                    if (msg.get("parent_header") or {}).get("msg_id") != msg_id:
+                        continue
+                    kind = (msg.get("header") or {}).get("msg_type") or msg.get("msg_type")
+                    content = msg.get("content") or {}
+                    if kind == "stream" and content.get("name") == "stdout":
+                        out.append(content.get("text", ""))
+                    elif kind == "error":
+                        error = f"{content.get('ename')}: {content.get('evalue')}"
+                    elif kind == "status" and content.get("execution_state") == "idle":
+                        break
+            except BaseException:
+                self._drop_ws()  # the reply stream is in an unknown state
+                raise
         if error:
             raise KernelError(error)
         return "".join(out)
@@ -271,6 +303,7 @@ except (OSError, ValueError, KeyError):
 """)))
 
     def close(self) -> None:
+        self._drop_ws()
         self._http.close()
 
 

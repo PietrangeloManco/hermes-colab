@@ -98,6 +98,10 @@ for epoch in range(start, EPOCHS):
     json.dump({"epoch": epoch + 1}, open(state_file, "w"))
 ```
 
+Save the weights first and the small progress file last, each with a write-to-temp plus
+`os.replace`: outputs come home in write order once they stop changing, so the progress
+file on your machine never describes weights that have not arrived yet.
+
 Large datasets: download them inside the job (Hugging Face, public URLs). Uploads are
 capped by `max_upload_mb` (default 512 MB) and output files above `max_sync_mb`
 (default 1 GB) are listed but not copied home.
