@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 RUNNER = Path(__file__).with_name("remote") / "runner.py"
 KEEPALIVE_EVERY = 60.0
 UNREACHABLE_LIMIT = 4
+QUIET_SECONDS = 2.0
 GPU_RETRY = (30, 60, 120, 300)
 
 
@@ -170,7 +171,7 @@ class Supervisor:
             changes["gpu"] = status["gpu"]
         self.store.update(run["id"], **changes)
         finished = status.get("state") == "finished"
-        self._sync(run, client, state.get("outputs") or [], final=finished)
+        self._sync(run, client, state.get("outputs") or [], final=finished, now=state.get("now"))
         if finished:
             code = status.get("exit_code")
             ok = code == 0
@@ -222,15 +223,18 @@ class Supervisor:
             with open(Path(run["local_dir"]) / "run.log", "a", encoding="utf-8") as fh:
                 fh.write(text)
 
-    def _sync(self, run: dict, client: RuntimeClient, listing: list, *, final: bool) -> None:
-        """Copy new or changed output files home. A file is copied once its size and mtime held still
-        for one poll (so a checkpoint is not read mid-write), or at once when the run finished."""
+    def _sync(self, run: dict, client: RuntimeClient, listing: list, *, final: bool,
+              now: float | None = None) -> None:
+        """Copy new or changed output files home. A file is copied once it has not changed for
+        QUIET_SECONDS by the runtime's own clock (so a checkpoint is not read mid-write, yet a file
+        rewritten every few seconds still comes home), once its size and mtime held still across two
+        polls, or at once when the run finished."""
         synced: dict[str, list] = dict(run.get("synced") or {})
         seen = self._seen.setdefault(run["id"], {})
         max_bytes = int(self.settings().get("max_sync_mb", 1024)) * 1024 * 1024
         out_dir = Path(run["local_dir"]) / "outputs"
         remote = client.run_dir(run["id"]) + "/outputs"
-        copied = 0
+        changed = False
         for rel, size, mtime in listing:
             rel_path = PurePosixPath(rel)
             if rel_path.is_absolute() or ".." in rel_path.parts:
@@ -238,13 +242,15 @@ class Supervisor:
             sig = [size, mtime]
             if synced.get(rel) == sig:
                 continue
-            stable = seen.get(rel) == sig
+            quiet = now is not None and now - float(mtime) >= QUIET_SECONDS
+            stable = quiet or seen.get(rel) == sig
             seen[rel] = sig
             if not (stable or final):
                 continue
             if size > max_bytes:
                 if synced.get(rel) != ["skipped", size]:
                     synced[rel] = ["skipped", size]
+                    changed = True
                     self.store.event(run["id"], f"Skipped {rel} ({size // 2**20} MB > max_sync_mb)")
                 continue
             data = client.download(f"{remote}/{rel}", size)
@@ -254,8 +260,8 @@ class Supervisor:
             tmp.write_bytes(data)
             os.replace(tmp, target)
             synced[rel] = sig
-            copied += 1
-        if copied:
+            changed = True
+        if changed:
             self.store.update(run["id"], synced=synced)
             run["synced"] = synced
 

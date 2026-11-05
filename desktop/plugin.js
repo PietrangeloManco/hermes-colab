@@ -78,7 +78,7 @@ function RunRow({ run, selected, onSelect }) {
           jsx('span', { className: 'shrink-0 tabular-nums', children: `${run.elapsed_minutes} min` })
         ]
       }),
-      active ? jsx(Meter, { fraction: fraction(run.progress) }) : null
+      active && run.progress ? jsx(Meter, { fraction: fraction(run.progress) }) : null
     ]
   })
 }
@@ -122,7 +122,7 @@ function Detail({ id }) {
             : null
         ]
       }),
-      active || run.progress
+      run.progress
         ? jsxs('div', {
             className: 'flex flex-col gap-1.5',
             children: [

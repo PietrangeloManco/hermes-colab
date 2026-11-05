@@ -225,9 +225,9 @@ emit(p.pid)
 
     def poll(self, run_dir: str, log_offset: int, max_log: int = 64 * 1024) -> dict[str, Any]:
         return self.call(_snippet(f"""
-import json, os
+import json, os, time
 d = {run_dir!r}
-res = {{"status": None, "log": "", "log_offset": {log_offset}, "outputs": [], "runner_err": ""}}
+res = {{"status": None, "log": "", "log_offset": {log_offset}, "outputs": [], "runner_err": "", "now": time.time()}}
 try:
     res["status"] = json.load(open(os.path.join(d, "status.json")))
 except (OSError, ValueError):
