@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 RUNNER = Path(__file__).with_name("remote") / "runner.py"
 KEEPALIVE_EVERY = 60.0
+LIVENESS_EVERY = 15.0  # Colab drops a reclaimed runtime from the assignment list at once
 UNREACHABLE_LIMIT = 4
 QUIET_SECONDS = 2.0
 GPU_RETRY = (30, 60, 120, 300)
@@ -51,6 +52,7 @@ class Supervisor:
         self.clock = clock
         self._clients: dict[str, RuntimeClient] = {}
         self._keepalive: dict[str, float] = {}
+        self._liveness: dict[str, float] = {}
         self._unreachable: dict[str, int] = {}
         self._next_try: dict[str, float] = {}
         self._gpu_tries: dict[str, int] = {}
@@ -156,6 +158,14 @@ class Supervisor:
             if not self.tunnel.keep_alive(run["endpoint"]):
                 raise RuntimeGone("Colab reports the runtime is gone")
             self._keepalive[run["id"]] = now
+        if now - self._liveness.get(run["id"], 0) >= LIVENESS_EVERY:
+            self._liveness[run["id"]] = now
+            try:
+                listed = {r.endpoint for r in self.tunnel.list_runtimes()}
+            except ColabError:
+                listed = None  # cannot tell; the keep-alive and the kernel calls still catch a dead VM
+            if listed is not None and run["endpoint"] not in listed:
+                raise RuntimeGone("Colab no longer lists the runtime as assigned")
         limit = float(run["spec"].get("timeout_minutes") or 0) * 60
         if limit and run.get("started_at") and now - run["started_at"] > limit:
             self.store.event(run["id"], f"Time limit of {run['spec']['timeout_minutes']} min reached; cancelling")
@@ -281,11 +291,32 @@ class Supervisor:
         self.store.update(run["id"], state="waiting_gpu")
         self.store.event(run["id"], f"Waiting for a {run['accelerator']} runtime ({reason}); retry in {delay}s")
 
+    def _salvage(self, run: dict) -> dict:
+        """A reclaimed VM often keeps answering for a minute: copy what it wrote since the last poll
+        before resuming elsewhere, so the fresh runtime starts from the newest checkpoint."""
+        client = self._clients.get(run["id"])
+        if client is None or run["state"] != "running":
+            return {}
+        try:
+            state = client.poll(client.run_dir(run["id"]), run["log_offset"], timeout=20)
+            self._append_log(run, state)
+            self.store.update(run["id"], log_offset=state["log_offset"])
+            self._sync(run, client, state.get("outputs") or [], final=True, now=state.get("now"))
+        except (RuntimeGone, RuntimeUnreachable, KernelError, OSError):
+            return {}
+        self.store.event(run["id"], "Copied the latest outputs from the reclaimed runtime")
+        return state.get("status") or {}
+
     def _lost(self, run: dict, reason: str) -> None:
+        status = self._salvage(run)
         self._drop(run["id"])
         settings = self.settings()
         if run["state"] == "cancelling":
             self._finish(run, "cancelled", error="cancelled")
+            return
+        if status.get("state") == "finished" and status.get("exit_code") == 0:
+            self.store.event(run["id"], "The job had already finished on the reclaimed runtime")
+            self._finish(run, "succeeded", exit_code=0)
             return
         if settings.get("auto_resume", True) and run["resumes"] < int(settings.get("max_resumes", 3)):
             self.store.update(run["id"], state="resuming", endpoint=None, resumes=run["resumes"] + 1)
@@ -302,6 +333,7 @@ class Supervisor:
             except Exception:
                 pass
         self._keepalive.pop(run_id, None)
+        self._liveness.pop(run_id, None)
         self._seen.pop(run_id, None)
 
     def _finish(self, run: dict, state: str, *, exit_code: int | None = None, error: str | None = None) -> None:

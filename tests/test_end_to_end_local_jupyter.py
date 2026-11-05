@@ -203,3 +203,29 @@ def test_cancel_running_job(jupyter, tmp_path):
     assert json.loads(tools.colab_cancel({"run": run_id}))["ok"]
     run = _drive(supervisor, store, run_id, until=lambda r: r["state"] == "cancelled")
     assert run["endpoint"] is None and tunnel.released
+
+
+def test_reclaimed_runtime_is_detected_quickly_and_salvaged(jupyter, tmp_path):
+    """Colab drops a reclaimed runtime from the assignment list while the VM may still answer for a
+    while: the supervisor notices within one liveness check, copies the newest outputs from the old
+    VM, and resumes from them instead of from an older synced checkpoint."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "train.py").write_text(TRAIN)
+    store, tunnel, supervisor, tools, finals = _make(tmp_path, jupyter)
+    run_id = json.loads(tools.colab_run({"path": "proj", "entry": "train.py"}))["run"]["id"]
+    _drive(supervisor, store, run_id, until=lambda r: (r.get("progress") or {}).get("step", 0) >= 2)
+    tunnel.alive.discard("vm1")  # reclaimed: no longer listed, but the VM still answers
+    time.sleep(2.6)  # one more epoch lands on the old VM, not yet synced
+    supervisor._liveness[run_id] = 0
+    run = _drive(supervisor, store, run_id, until=lambda r: r["state"] in ("resuming", "uploading", "starting",
+                                                                         "running") and r["attempt"] == 2,
+                 timeout=30)
+    events = [e[1] for e in run["events"]]
+    assert any("Copied the latest outputs" in e for e in events), events
+    salvaged = json.loads((Path(run["local_dir"]) / "outputs" / "ckpt.json").read_text())["epoch"]
+    run = _drive(supervisor, store, run_id, until=lambda r: r["state"] in ("succeeded", "failed"))
+    assert run["state"] == "succeeded"
+    log = (Path(run["local_dir"]) / "run.log").read_text()
+    resumed_at = int(log.split("resumed at epoch")[1].split()[0])
+    assert resumed_at == salvaged + 1 >= 3

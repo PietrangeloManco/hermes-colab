@@ -255,7 +255,8 @@ p = subprocess.Popen([sys.executable, os.path.join({run_dir!r}, "runner.py"), {r
 emit(p.pid)
 """)))
 
-    def poll(self, run_dir: str, log_offset: int, max_log: int = 64 * 1024) -> dict[str, Any]:
+    def poll(self, run_dir: str, log_offset: int, max_log: int = 64 * 1024, *,
+             timeout: float = 120.0) -> dict[str, Any]:
         return self.call(_snippet(f"""
 import json, os, time
 d = {run_dir!r}
@@ -289,7 +290,7 @@ for base, dirs, files in os.walk(out):
         if len(res["outputs"]) >= 2000:
             break
 emit(res)
-"""))
+"""), timeout=timeout)
 
     def signal_runner(self, run_dir: str) -> bool:
         return bool(self.call(_snippet(f"""
