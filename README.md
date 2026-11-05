@@ -23,6 +23,10 @@ No browser tab to babysit, no copy-pasting notebooks, no lost epochs.
 | `colab_runtimes` / `colab_release_runtime` | See and free the runtimes assigned to your account. |
 | `colab_doctor` | Checks setup end to end and names the exact next step. |
 
+**Hermes Desktop:** a *Colab* page in the sidebar lists your runs with live progress,
+GPU name/utilisation/memory, elapsed time, compute-unit estimate, the log, synced outputs
+and events, with *Cancel* and *Resume on a fresh runtime* buttons. It follows the app theme.
+
 How a run behaves:
 
 - **Background supervision.** Runs live in a small SQLite store in the profile's
@@ -122,7 +126,7 @@ capped by `max_upload_mb` (default 512 MB) and output files above `max_sync_mb`
 ## Development
 
 ```bash
-uv venv && uv pip install "httpx>=0.27,<1" "websockets>=13,<16" pytest jupyter_server ipykernel ruff
+uv venv && uv pip install "httpx>=0.27,<1" "websockets>=13,<16" pytest jupyter_server ipykernel fastapi ruff
 .venv/bin/python -m pytest tests -q
 ```
 
