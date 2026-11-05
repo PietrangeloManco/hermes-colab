@@ -1,0 +1,26 @@
+[project]
+name = "hermes-colab"
+version = "0.1.0"
+description = "Hermes Agent plugin: run scripts and notebooks on Google Colab runtimes."
+requires-python = ">=3.11"
+license = "MIT"
+# httpx and websockets ship with Hermes Agent; declared here with the same ranges so
+# `hermes plugins validate --install-deps` resolves them without changing the host venv.
+dependencies = [
+  "httpx>=0.27,<1",
+  "websockets>=13,<16",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "ruff>=0.6", "jupyter_server>=2.14,<3", "ipykernel>=6.29,<8"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hermes_colab"]

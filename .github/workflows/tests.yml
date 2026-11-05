@@ -1,0 +1,22 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Lint
+        run: uvx ruff check .
+      - name: Offline tests (real local Jupyter kernel as the runtime)
+        run: |
+          uv venv
+          uv pip install "httpx>=0.27,<1" "websockets>=13,<16" "pytest>=8,<9" "jupyter_server>=2.14,<3" "ipykernel>=6.29,<8"
+          uv run --no-project python -m pytest tests -q

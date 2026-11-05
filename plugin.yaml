@@ -1,0 +1,97 @@
+name: hermes-colab
+version: 0.1.0
+description: >-
+  Run Python scripts and notebooks on Google Colab GPUs from chat: Hermes gets
+  the runtime, uploads your code, keeps it alive, syncs outputs and checkpoints
+  home while it runs, resumes on a fresh runtime when Colab takes one away, and
+  tells you when it is done.
+author: Pietrangelo Manco
+license: MIT
+homepage: https://github.com/PietrangeloManco/hermes-colab
+manifest_version: 2
+requires_hermes: ">=0.22.7"
+tags: [colab, gpu, training, notebooks, jobs]
+
+provides_tools:
+  - colab_doctor
+  - colab_run
+  - colab_status
+  - colab_logs
+  - colab_cancel
+  - colab_resume
+  - colab_runtimes
+  - colab_release_runtime
+provides_hooks:
+  - pre_llm_call
+
+# Optional so the plugin (and colab_doctor) loads before setup and can explain the next step.
+optional_env:
+  - name: HERMES_COLAB_CLIENT_ID
+    description: "Client ID of your own Google Cloud OAuth client (type: Desktop app)"
+    url: "https://github.com/PietrangeloManco/hermes-colab#1-create-your-google-oauth-client"
+  - name: HERMES_COLAB_CLIENT_SECRET
+    description: "Client secret of the same OAuth client"
+    url: "https://github.com/PietrangeloManco/hermes-colab#1-create-your-google-oauth-client"
+    secret: true
+
+oauth:
+  - id: google
+    authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+    token_url: https://oauth2.googleapis.com/token
+    scopes:
+      - openid
+      - https://www.googleapis.com/auth/userinfo.email
+      - https://www.googleapis.com/auth/colaboratory
+    client_id_env: HERMES_COLAB_CLIENT_ID
+    client_secret_env: HERMES_COLAB_CLIENT_SECRET
+    hosts: [colab.research.google.com]
+    authorize_params: {access_type: offline, prompt: consent}
+
+config_schema:
+  client_id:
+    type: secret
+    env: HERMES_COLAB_CLIENT_ID
+    label: Google OAuth client ID
+    description: Your own Google Cloud OAuth client (Desktop app). Then run `hermes auth add hermes-colab:google`.
+  client_secret:
+    type: secret
+    env: HERMES_COLAB_CLIENT_SECRET
+    label: Google OAuth client secret
+  default_accelerator:
+    type: str
+    choices: [T4, L4, A100, H100, NONE]
+    default: T4
+    label: Default accelerator
+    description: Used when a run does not name one. T4 is available on the free tier.
+  auto_resume:
+    type: bool
+    default: true
+    label: Resume on a fresh runtime
+    description: When Colab reclaims a runtime mid-run, get a new one and continue from the synced outputs.
+  max_resumes:
+    type: int
+    default: 3
+    label: Resume attempts per run
+  wait_for_gpu_minutes:
+    type: int
+    default: 30
+    label: Wait for a GPU (minutes)
+    description: How long a run keeps retrying when Colab has no runtime of that type available.
+  max_upload_mb:
+    type: int
+    default: 512
+    label: Upload limit (MB)
+    description: Total size of the code and data a run uploads. Download large datasets inside the job.
+  max_sync_mb:
+    type: int
+    default: 1024
+    label: Largest output file synced home (MB)
+  compute_unit_rates:
+    type: dict
+    default: {T4: 1.96, L4: 4.82, A100: 11.77, H100: 18.0, NONE: 0.07}
+    label: Compute units per hour
+    description: Only for the estimate shown in status; check your plan's current rates in Colab.
+  notify_on_finish:
+    type: bool
+    default: true
+    label: Report finished runs in the chat that started them
