@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS runs (
     runtime_seconds REAL NOT NULL DEFAULT 0,
     synced TEXT NOT NULL DEFAULT '{}',
     session_id TEXT,
+    session_key TEXT,
     notified INTEGER NOT NULL DEFAULT 0,
     events TEXT NOT NULL DEFAULT '[]'
 );
@@ -61,6 +62,9 @@ class Store:
         self._local = threading.local()
         with self._db() as db:
             db.executescript(_SCHEMA)
+            cols = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
+            if "session_key" not in cols:  # stores created by 0.1.0 previews
+                db.execute("ALTER TABLE runs ADD COLUMN session_key TEXT")
 
     def _db(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)

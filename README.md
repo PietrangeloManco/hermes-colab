@@ -45,8 +45,17 @@ How a run behaves:
   from your script; notebooks report cell progress automatically (via papermill).
 - **Waiting for a GPU.** When Colab has no runtime of the requested type, the run waits
   and retries with backoff (default up to 30 minutes) instead of failing.
-- **The chat hears back.** On completion Hermes posts a summary to the session that
-  started the run (and, failing that, adds it to that session's next turn).
+- **The chat hears back.** When a run ends, its summary (state, time, compute units,
+  outputs) reaches the chat that started it on that chat's next turn. To have it arrive on
+  its own, as a new message even while you are away, allow the plugin to queue messages:
+
+  ```yaml
+  # config.yaml
+  plugins:
+    entries:
+      hermes-colab:
+        allow_gateway_injection: true
+  ```
 
 ## Setup
 

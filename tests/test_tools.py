@@ -78,3 +78,45 @@ def test_store_lease_is_exclusive(tmp_path):
     assert store.acquire_lease("a") and not store.acquire_lease("b") and store.acquire_lease("a")
     store.release_lease("a")
     assert store.acquire_lease("b")
+
+
+def test_finish_notice_goes_to_the_starting_chat_by_session_key(tmp_path, monkeypatch):
+    import hermes_colab.tools as tools_mod
+
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path)
+    monkeypatch.setattr(tools_mod, "_session_key", lambda: "ses_abc")
+    run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="s1"))["run"]["id"]
+    run = store.update(run_id, state="succeeded", finished_at=store.get(run_id)["created_at"] + 90)
+    calls = []
+    assert tools.push_notice(run, lambda text, session_key=None: calls.append((text, session_key)) or True)
+    assert calls[0][1] == "ses_abc" and "finished" in calls[0][0]
+    assert store.get(run_id)["notified"] == 1
+    assert tools.pending_notices("s1") == []  # not repeated on the next turn
+
+
+def test_refused_notice_falls_back_to_next_turn(tmp_path, monkeypatch):
+    import hermes_colab.tools as tools_mod
+
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path)
+    monkeypatch.setattr(tools_mod, "_session_key", lambda: "ses_abc")
+    run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="s1"))["run"]["id"]
+    run = store.update(run_id, state="failed", error="exit code 1")
+    assert not tools.push_notice(run, lambda text, session_key=None: False)  # injection not allowed
+    notes = tools.pending_notices("s1")
+    assert len(notes) == 1 and "failed" in notes[0] and "exit code 1" in notes[0]
+
+
+def test_old_store_gets_session_key_column(tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "runs.db")
+    db.execute("CREATE TABLE runs (id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, "
+               "created_at REAL NOT NULL, updated_at REAL NOT NULL, spec TEXT NOT NULL, local_dir TEXT NOT NULL, "
+               "accelerator TEXT NOT NULL)")
+    db.commit()
+    db.close()
+    Store(tmp_path / "runs.db")
+    cols = {r[1] for r in sqlite3.connect(tmp_path / "runs.db").execute("PRAGMA table_info(runs)")}
+    assert "session_key" in cols

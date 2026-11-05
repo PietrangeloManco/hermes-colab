@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import contextvars
 import json
 import os
 import time
@@ -127,7 +125,6 @@ class Tools:
         self.settings = settings
         self.cwd = cwd
         self.env = env
-        self.contexts: dict[str, contextvars.Context] = {}
 
     # ── helpers ───────────────────────────────────────────────────────────────────────────────────
     def _resolve(self, raw: str) -> Path:
@@ -238,9 +235,9 @@ class Tools:
             }
             name = str(args.get("name") or Path(entry).stem)[:60]
             run = self.store.create({"id": run_id, "name": name, "spec": spec, "local_dir": str(local),
-                                     "accelerator": accelerator, "session_id": session_id})
+                                     "accelerator": accelerator, "session_id": session_id,
+                                     "session_key": _session_key()})
             self.store.event(run_id, f"Queued {entry} ({len(files)} files, {len(data) / 2**20:.1f} MB zipped)")
-            self.contexts[run_id] = contextvars.copy_context()
             self.ensure_supervisor()
             return _ok(run=self._view(self.store.get(run_id) or run, detail=False), files=len(files),
                        hint="Colab runs in the background. Check with colab_status; outputs land in local_dir.")
@@ -297,9 +294,9 @@ class Tools:
         if run["state"] not in ("failed", "cancelled"):
             return _err(f"only failed or cancelled runs can be resumed (this one is {run['state']})")
         self.store.update(run["id"], state="resuming", error=None, exit_code=None, finished_at=None,
-                          endpoint=None, notified=0, session_id=session_id or run.get("session_id"))
+                          endpoint=None, notified=0, session_id=session_id or run.get("session_id"),
+                          session_key=_session_key() or run.get("session_key"))
         self.store.event(run["id"], "Manual resume requested")
-        self.contexts[run["id"]] = contextvars.copy_context()
         self.ensure_supervisor()
         return _ok(run=self._view(self.store.get(run["id"]) or run, detail=False))
 
@@ -348,11 +345,29 @@ class Tools:
                 self.store.update(run["id"], notified=1)
         return notes
 
-    def push_notice(self, run: dict, inject: Callable[[str], bool]) -> None:
-        """Best effort: tell the chat that started the run, in that chat's own context."""
-        context = self.contexts.pop(run["id"], None)
-        if context is None or not self.settings().get("notify_on_finish", True):
-            return
-        with contextlib.suppress(Exception):
-            if context.run(inject, self.summary(run)):
-                self.store.update(run["id"], notified=1)
+    def push_notice(self, run: dict, inject: Callable[..., bool]) -> bool:
+        """Best effort: queue the summary on the chat that started the run (its durable session key).
+
+        Needs ``plugins.entries.hermes-colab.allow_gateway_injection: true``; without it, or when the
+        chat is gone, the summary is added to that session's next turn by the pre_llm_call hook.
+        """
+        key = run.get("session_key")
+        if not key or not self.settings().get("notify_on_finish", True):
+            return False
+        try:
+            delivered = bool(inject(self.summary(run) + " (automatic notice from the hermes-colab plugin)",
+                                    session_key=key))
+        except Exception:
+            return False
+        if delivered:
+            self.store.update(run["id"], notified=1)
+        return delivered
+
+
+def _session_key() -> str | None:
+    """Durable routing key of the chat this tool call works for (Desktop/TUI ``ses_…`` or gateway)."""
+    try:
+        from gateway.session_context import bound_session_key
+    except ImportError:
+        return None
+    return bound_session_key() or None
