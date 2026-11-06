@@ -11,7 +11,7 @@ import {
   queryClient,
   useQuery
 } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-colab'
@@ -23,6 +23,22 @@ const BADGE = { succeeded: 'success', failed: 'destructive', cancelled: 'muted',
 let rest = null
 
 const muted = 'text-(--ui-text-tertiary)'
+
+// Layout uses inline styles and the plugin's own measured width, not Tailwind breakpoint or arbitrary
+// classes: the host stylesheet only carries the utilities the app itself uses, so those never apply.
+function useWidth() {
+  const [node, setNode] = useState(null) // callback ref: the element can mount after the first render
+  const [width, setWidth] = useState(0)
+  useEffect(() => {
+    if (!node || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(entries => setWidth(entries[0].contentRect.width))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [node])
+  return [setNode, width]
+}
+
+const isProgressLine = line => line.startsWith('HERMES_PROGRESS ')
 
 function Meter({ fraction }) {
   const pct = Math.max(0, Math.min(1, fraction || 0)) * 100
@@ -84,6 +100,7 @@ function RunRow({ run, selected, onSelect }) {
 }
 
 function Detail({ id }) {
+  const [ref, width] = useWidth()
   const { data, error } = useQuery({
     queryKey: [ID, 'run', id],
     queryFn: () => rest(`/runs/${encodeURIComponent(id)}`),
@@ -104,8 +121,10 @@ function Detail({ id }) {
     }
   }
   const gpu = run.gpu
+  const sideBySide = width >= 900
   return jsxs('div', {
-    className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-4 p-4',
+    ref,
+    className: 'flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-auto p-4',
     children: [
       jsxs('div', {
         className: 'flex min-w-0 flex-wrap items-center gap-2',
@@ -132,7 +151,8 @@ function Detail({ id }) {
           })
         : null,
       jsxs('div', {
-        className: 'grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-3',
+        className: 'grid gap-3',
+        style: { gridTemplateColumns: 'repeat(auto-fit, minmax(8.5rem, 1fr))' },
         children: [
           jsx(Stat, { label: 'Runtime', value: gpu?.name || run.accelerator }),
           jsx(Stat, { label: 'GPU use', value: gpu ? `${gpu.util}% · ${(gpu.mem_used_mb / 1024).toFixed(1)}/${(gpu.mem_total_mb / 1024).toFixed(0)} GB` : null }),
@@ -145,15 +165,17 @@ function Detail({ id }) {
         ? jsx('div', { className: 'rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive break-words', children: run.error })
         : null,
       jsxs('div', {
-        className: 'grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]',
+        className: 'grid min-h-0 flex-1 gap-4',
+        style: { gridTemplateColumns: sideBySide ? 'minmax(0, 2fr) minmax(0, 1fr)' : 'minmax(0, 1fr)' },
         children: [
           jsxs('section', {
             className: 'flex min-h-48 min-w-0 flex-col gap-1.5',
             children: [
               jsx('div', { className: `text-xs font-medium ${muted}`, children: 'Log' }),
               jsx(LogView, {
-                className: 'min-h-40 flex-1 overflow-auto whitespace-pre-wrap break-all',
-                children: (run.log || []).join('\n') || 'No output yet.'
+                className: 'flex-1 overflow-auto whitespace-pre-wrap break-all',
+                style: { minHeight: '10rem' },
+                children: (run.log || []).filter(line => !isProgressLine(line)).join('\n') || 'No output yet.'
               })
             ]
           }),
@@ -186,6 +208,7 @@ function Detail({ id }) {
 }
 
 function ColabPage() {
+  const [ref, width] = useWidth()
   const { data, error, isLoading } = useQuery({
     queryKey: [ID, 'runs'],
     queryFn: () => rest('/runs'),
@@ -194,6 +217,7 @@ function ColabPage() {
   const [picked, setPicked] = useState(null)
   const runs = data?.runs || []
   const selected = picked && runs.some(r => r.id === picked) ? picked : runs[0]?.id
+  const wide = width === 0 || width >= 760
   if (error)
     return jsx(EmptyState, {
       title: 'hermes-colab backend unavailable',
@@ -205,10 +229,13 @@ function ColabPage() {
       description: 'Ask Hermes to run a script or notebook on a Colab GPU, e.g. “train train.py on a T4”.'
     })
   return jsxs('div', {
-    className: 'flex h-full min-h-0 w-full min-w-0 flex-col md:flex-row',
+    ref,
+    className: 'flex h-full min-h-0 w-full min-w-0',
+    style: { flexDirection: wide ? 'row' : 'column', overflowY: wide ? 'hidden' : 'auto' },
     children: [
       jsxs('aside', {
-        className: 'flex max-h-64 min-w-0 shrink-0 flex-col gap-1 overflow-auto border-b border-(--ui-stroke-secondary) p-2 md:max-h-none md:w-72 md:border-r md:border-b-0',
+        className: 'flex min-w-0 shrink-0 flex-col gap-1 overflow-auto border-(--ui-stroke-secondary) p-2',
+        style: wide ? { width: '18rem', borderRightWidth: '1px' } : { maxHeight: '16rem', borderBottomWidth: '1px' },
         children: [
           jsx('div', { className: `px-3 pt-1 pb-1 text-xs font-medium ${muted}`, children: 'Colab runs' }),
           ...runs.map(run => jsx(RunRow, { key: run.id, run, selected: run.id === selected, onSelect: () => setPicked(run.id) }))

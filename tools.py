@@ -17,6 +17,7 @@ from .store import ACTIVE, FINAL, Store, new_run_id
 PROTECTED = (".hermes", ".ssh", ".gnupg", ".aws", ".config", ".kube", ".docker", ".local/share/keyrings")
 # Clients whose chats Hermes addresses by session key (the TUI/Desktop host of ``inject_message``).
 LOCAL_SURFACES = ("desktop", "tui", "cli")
+PROGRESS_PREFIX = "HERMES_PROGRESS "
 STATE_LABEL = {
     "queued": "queued", "waiting_gpu": "waiting for a GPU", "assigning": "requesting a runtime",
     "uploading": "uploading code", "starting": "starting", "running": "running", "resuming": "resuming",
@@ -89,7 +90,8 @@ SCHEMAS: dict[str, dict] = {
     },
     "colab_logs": {
         "name": "colab_logs",
-        "description": "Return the last lines of a Colab run's combined stdout/stderr (synced locally).",
+        "description": "Return the last lines of a Colab run's combined stdout/stderr (synced locally). "
+                       "HERMES_PROGRESS lines are left out: colab_status reports progress.",
         "parameters": {"type": "object", "properties": {
             "run": _RUN_REF,
             "lines": {"type": "integer", "minimum": 1, "maximum": 400, "description": "Default 60."}}},
@@ -280,7 +282,8 @@ class Tools:
             fh.seek(0, os.SEEK_END)
             size = fh.tell()
             fh.seek(max(0, size - 256 * 1024))
-            tail = fh.read().decode("utf-8", "replace").splitlines()[-lines:]
+            tail = [ln for ln in fh.read().decode("utf-8", "replace").splitlines()
+                    if not ln.startswith(PROGRESS_PREFIX)][-lines:]  # progress is in colab_status
         return _ok(id=run["id"], state=run["state"], lines=tail)
 
     def colab_cancel(self, args: dict, **_: Any) -> str:

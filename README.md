@@ -17,7 +17,7 @@ No browser tab to babysit, no copy-pasting notebooks, no lost epochs.
 |---|---|
 | `colab_run` | Start a `.py` or `.ipynb` (a single file or a project folder) on `T4`, `L4`, `A100`, `H100` or a TPU. Returns immediately with a run id. |
 | `colab_status` | State, progress bar data, GPU name/utilisation/memory, elapsed time, compute-unit estimate, synced outputs, recent events. `all=true` lists recent runs. |
-| `colab_logs` | Tail of the job's stdout/stderr. |
+| `colab_logs` | Tail of the job's stdout/stderr (progress lines left out; they drive `colab_status`). |
 | `colab_cancel` | Stop the job, sync what it wrote, release the runtime. |
 | `colab_resume` | Restart a failed/cancelled run on a fresh runtime with its outputs restored. |
 | `colab_runtimes` / `colab_release_runtime` | See and free the runtimes assigned to your account. |

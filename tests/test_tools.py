@@ -152,3 +152,13 @@ def test_refused_notice_falls_back_to_next_turn(tmp_path):
     assert not tools.push_notice(run, lambda text, **kw: False)  # injection not allowed
     notes = tools.pending_notices("s1")
     assert len(notes) == 1 and "failed" in notes[0] and "exit code 1" in notes[0]
+
+
+def test_logs_leave_out_progress_lines(tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path)
+    run_id = json.loads(tools.colab_run({"path": "a.py"}))["run"]["id"]
+    log = [f"line {i}\nHERMES_PROGRESS {{\"step\": {i}, \"total\": 9}}" for i in range(9)]
+    (tmp_path / "colab_runs" / run_id / "run.log").write_text("\n".join(log) + "\n")
+    lines = json.loads(tools.colab_logs({"run": run_id, "lines": 3}))["lines"]
+    assert lines == ["line 6", "line 7", "line 8"]
