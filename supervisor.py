@@ -383,12 +383,16 @@ def _failure_line(log: Path) -> str:
 
 
 class SupervisorThread:
-    """Daemon loop with a store lease; started on demand, exits when no run is active."""
+    """Daemon loop with a store lease. While the process lives it stays on standby (a cheap store read
+    every ``standby_interval`` s) so a long-lived Hermes adopts runs that a short-lived process (a cron
+    tick, a one-shot CLI) started and left behind; it takes the lease only while runs are active."""
 
-    def __init__(self, supervisor: Supervisor, *, home_scope: Callable[[], Any], interval: float = 10.0):
+    def __init__(self, supervisor: Supervisor, *, home_scope: Callable[[], Any], interval: float = 10.0,
+                 standby_interval: float = 30.0):
         self.supervisor = supervisor
         self.home_scope = home_scope
         self.interval = interval
+        self.standby_interval = standby_interval
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -424,18 +428,17 @@ class SupervisorThread:
             pass
 
     def _run(self) -> None:
+        store = self.supervisor.store
         with self.home_scope():
-            idle = 0
             while not self._stop.is_set():
+                wait = self.interval
                 try:
-                    if self.supervisor.store.acquire_lease(self.owner):
-                        active = self.supervisor.tick()
-                        idle = 0 if active else idle + 1
+                    if store.list(states=ACTIVE, limit=1):
+                        if store.acquire_lease(self.owner):
+                            self.supervisor.tick()
                     else:
-                        idle = 0
+                        store.release_lease(self.owner)
+                        wait = self.standby_interval
                 except Exception:
                     logger.exception("hermes-colab supervisor tick failed")
-                if idle >= 3:
-                    self.supervisor.store.release_lease(self.owner)
-                    return
-                self._stop.wait(self.interval)
+                self._stop.wait(wait)

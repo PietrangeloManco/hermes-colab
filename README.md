@@ -31,8 +31,9 @@ How a run behaves:
 
 - **Background supervision.** Runs live in a small SQLite store in the profile's
   plugin data directory. A supervisor thread (one per profile, lease-protected)
-  drives them, so a run keeps going after the chat turn ends and is picked up again
-  after Hermes restarts.
+  drives them, so a run keeps going after the chat turn ends, is picked up again
+  after Hermes restarts, and a run started by a cron job or a one-shot CLI is
+  carried on by the Hermes that keeps running (Desktop backend, gateway).
 - **Outputs come home as they appear.** Anything the job writes to
   `$HERMES_COLAB_OUTPUT_DIR` is copied to `<your project>/colab_runs/<run id>/outputs/`
   once a file stops changing — checkpoints, metrics, plots, the executed notebook.
@@ -141,7 +142,8 @@ capped by `max_upload_mb` (default 512 MB) and output files above `max_sync_mb`
   run's requirements there (plus `papermill` for notebooks). Nothing runs on your machine
   except the plugin itself.
 - **Background work:** a daemon thread supervises active runs while Hermes is running
-  (one per profile, coordinated through a lease in the run store).
+  (one per profile, coordinated through a lease in the run store); with no active run it
+  only reads the run store every 30 s.
 - **Local data:** run records live in SQLite under the profile's plugin data directory
   (`plugin-data/hermes-colab/runs.db`); logs and outputs in the run folder you see in
   `colab_status`. No credentials are stored by the plugin.

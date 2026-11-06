@@ -162,3 +162,37 @@ def test_logs_leave_out_progress_lines(tmp_path):
     (tmp_path / "colab_runs" / run_id / "run.log").write_text("\n".join(log) + "\n")
     lines = json.loads(tools.colab_logs({"run": run_id, "lines": 3}))["lines"]
     assert lines == ["line 6", "line 7", "line 8"]
+
+
+def test_idle_supervisor_adopts_a_run_left_by_an_exited_process(tmp_path):
+    """A long-lived Hermes (the Desktop backend, the gateway) whose supervisor went idle must pick up
+    a run that a short-lived process (a cron tick, a one-shot CLI) started and then left behind."""
+    import contextlib
+    import time as _time
+
+    from hermes_colab.supervisor import SupervisorThread
+
+    store = Store(tmp_path / "runs.db")
+    ticks = []
+
+    class Counting:
+        def __init__(self):
+            self.store = store
+
+        def tick(self):
+            active = len(store.list(states=("queued",)))
+            ticks.append(active)
+            return active
+
+    thread = SupervisorThread(Counting(), home_scope=contextlib.nullcontext, interval=0.02)
+    thread.standby_interval = 0.02
+    thread.ensure_running()
+    try:
+        _time.sleep(0.3)  # idle: nothing to drive
+        store.create({"id": "r1", "name": "left", "spec": {}, "local_dir": str(tmp_path), "accelerator": "T4"})
+        deadline = _time.monotonic() + 2
+        while 1 not in ticks and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        assert 1 in ticks, "the idle supervisor never adopted the run"
+    finally:
+        thread.stop()

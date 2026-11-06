@@ -9,7 +9,7 @@ import threading
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from .store import ACTIVE, Store
+from .store import Store
 from .supervisor import Supervisor, SupervisorThread
 from .tools import SCHEMAS, Tools
 
@@ -125,6 +125,6 @@ def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.on_unload(svc.thread.stop)
 
-    # Runs survive a Hermes restart: pick supervision back up if any run is still active.
-    if svc.store.list(states=ACTIVE, limit=1):
-        svc.thread.ensure_running()
+    # Runs survive the process that started them: this process drives any active run once the lease is
+    # free (after a restart, or when a cron tick or one-shot CLI that started it has exited).
+    svc.thread.ensure_running()
