@@ -55,3 +55,12 @@ def test_detail_shows_the_outputs_folder_under_home_as_tilde(tmp_path, monkeypat
     detail = client.get(f"/runs/{run_id}").json()["run"]
     assert detail["outputs_dir"] == f"~/colab_runs/{run_id}/outputs"
     assert detail["local_dir"] == str(tmp_path / "colab_runs" / run_id)
+
+
+def test_dashboard_manifest_reports_the_plugin_version():
+    """The backend lists the dashboard half with the version in its manifest (``0.0.0`` when absent)."""
+    import re
+
+    manifest = json.loads((ROOT / "dashboard" / "manifest.json").read_text())
+    version = re.search(r"^version:\s*(\S+)", (ROOT / "plugin.yaml").read_text(), re.M).group(1)
+    assert manifest.get("version") == version
