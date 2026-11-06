@@ -196,3 +196,36 @@ def test_idle_supervisor_adopts_a_run_left_by_an_exited_process(tmp_path):
         assert 1 in ticks, "the idle supervisor never adopted the run"
     finally:
         thread.stop()
+
+
+def test_new_run_wakes_a_standby_supervisor_at_once(tmp_path):
+    """colab_run calls ensure_running: a supervisor on standby must not sit out its standby interval."""
+    import contextlib
+    import time as _time
+
+    from hermes_colab.supervisor import SupervisorThread
+
+    store = Store(tmp_path / "runs.db")
+    seen = []
+
+    class Counting:
+        def __init__(self):
+            self.store = store
+
+        def tick(self):
+            seen.append(len(store.list(states=("queued",))))
+            return seen[-1]
+
+    thread = SupervisorThread(Counting(), home_scope=contextlib.nullcontext, interval=0.02)
+    thread.standby_interval = 30
+    thread.ensure_running()
+    try:
+        _time.sleep(0.2)
+        store.create({"id": "r1", "name": "new", "spec": {}, "local_dir": str(tmp_path), "accelerator": "T4"})
+        thread.ensure_running()
+        deadline = _time.monotonic() + 2
+        while 1 not in seen and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        assert 1 in seen, "the new run waited for the standby interval"
+    finally:
+        thread.stop()

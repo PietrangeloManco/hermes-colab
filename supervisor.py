@@ -397,6 +397,7 @@ class SupervisorThread:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._wake = threading.Event()  # set by stop() and by a new request, ends the current wait
         self._atexit = False
 
     def _release_on_exit(self) -> None:
@@ -409,6 +410,7 @@ class SupervisorThread:
     def ensure_running(self) -> None:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
+                self._wake.set()  # a new or changed run: tick now, not after the standby interval
                 return
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="hermes-colab-supervisor", daemon=True)
@@ -419,6 +421,7 @@ class SupervisorThread:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         thread = self._thread
         if thread is not None:
             thread.join(timeout=5)
@@ -441,4 +444,5 @@ class SupervisorThread:
                         wait = self.standby_interval
                 except Exception:
                     logger.exception("hermes-colab supervisor tick failed")
-                self._stop.wait(wait)
+                self._wake.wait(wait)
+                self._wake.clear()
