@@ -96,17 +96,27 @@ def test_finish_notice_is_injected_in_the_starting_chat_context(tmp_path):
 
     chat = contextvars.ContextVar("chat", default="")
     (tmp_path / "a.py").write_text("x")
-    store, _, tools = _tools(tmp_path)
+    store, _, tools = _tools(tmp_path, surface="telegram")  # a messaging chat: keyless route
     token = chat.set("ses_abc")  # the tool call runs inside the chat's context
     run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="s1"))["run"]["id"]
     chat.reset(token)
     run = store.update(run_id, state="succeeded")
     seen = []
     # Later, on the supervisor thread, the injection must still see the starting chat.
-    assert tools.push_notice(run, lambda text: seen.append((chat.get(), text)) or True)
-    assert seen[0][0] == "ses_abc" and "finished" in seen[0][1]
+    assert tools.push_notice(run, lambda text, **kw: seen.append((chat.get(), text, kw)) or True)
+    assert seen[0][0] == "ses_abc" and "finished" in seen[0][1] and seen[0][2] == {}
     assert store.get(run_id)["notified"] == 1
     assert tools.pending_notices("s1") == []  # not repeated on the next turn
+
+
+def test_desktop_chat_without_a_reported_surface_uses_its_session_key(tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path, surface="")  # what the Desktop backend reports today
+    run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="20261106_101849_202906"))["run"]["id"]
+    run = store.update(run_id, state="succeeded")
+    seen = []
+    assert tools.push_notice(run, lambda text, **kw: seen.append(kw) or True)
+    assert seen == [{"session_key": "20261106_101849_202906"}]
 
 
 def test_desktop_notice_goes_to_the_session_key_even_after_a_restart(tmp_path):
@@ -139,6 +149,6 @@ def test_refused_notice_falls_back_to_next_turn(tmp_path):
     store, _, tools = _tools(tmp_path)
     run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="s1"))["run"]["id"]
     run = store.update(run_id, state="failed", error="exit code 1")
-    assert not tools.push_notice(run, lambda text: False)  # injection not allowed
+    assert not tools.push_notice(run, lambda text, **kw: False)  # injection not allowed
     notes = tools.pending_notices("s1")
     assert len(notes) == 1 and "failed" in notes[0] and "exit code 1" in notes[0]

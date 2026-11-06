@@ -16,7 +16,7 @@ from .store import ACTIVE, FINAL, Store, new_run_id
 
 PROTECTED = (".hermes", ".ssh", ".gnupg", ".aws", ".config", ".kube", ".docker", ".local/share/keyrings")
 # Clients whose chats Hermes addresses by session key (the TUI/Desktop host of ``inject_message``).
-LOCAL_SURFACES = ("desktop", "tui")
+LOCAL_SURFACES = ("desktop", "tui", "cli")
 STATE_LABEL = {
     "queued": "queued", "waiting_gpu": "waiting for a GPU", "assigning": "requesting a runtime",
     "uploading": "uploading code", "starting": "starting", "running": "running", "resuming": "resuming",
@@ -371,14 +371,16 @@ class Tools:
             return False
         text = self.summary(run) + " (automatic notice from the hermes-colab plugin)"
         session = run.get("session_id")
-        local = bool(session) and (run.get("spec") or {}).get("surface") in LOCAL_SURFACES
+        surface = str((run.get("spec") or {}).get("surface") or "")
+        # A messaging chat names its platform; Desktop/TUI chats report a local surface or none at
+        # all (some cores leave it empty there), and their session id is their session key.
+        local = bool(session) and (surface in LOCAL_SURFACES or not surface)
+        delivered = False
         try:
             if local:
                 delivered = bool(inject(text, session_key=session))
-            elif context is not None:
+            if not delivered and context is not None:
                 delivered = bool(context.run(inject, text))
-            else:
-                return False
         except Exception:
             return False
         if delivered:
