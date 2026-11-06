@@ -25,6 +25,14 @@ STATE_LABEL = {
 }
 
 
+def display_path(path: Path) -> str:
+    """A folder as the user knows it: under the home directory as ``~/...`` (for chat and UI text)."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _ok(**data: Any) -> str:
     return json.dumps({"ok": True, **data}, default=str)
 
@@ -347,7 +355,8 @@ class Tools:
         if run.get("error") and run["state"] != "succeeded":
             text += f" Error: {run['error']}."
         if view["outputs"]:
-            text += f" Outputs in {run['local_dir']}/outputs: {', '.join(view['outputs'][:8])}."
+            outputs = display_path(Path(run["local_dir"]) / "outputs")
+            text += f" Outputs in {outputs}: {', '.join(view['outputs'][:8])}."
         return text
 
     def pending_notices(self, session_id: str | None) -> list[str]:

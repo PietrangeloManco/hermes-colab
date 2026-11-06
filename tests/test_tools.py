@@ -229,3 +229,14 @@ def test_new_run_wakes_a_standby_supervisor_at_once(tmp_path):
         assert 1 in seen, "the new run waited for the standby interval"
     finally:
         thread.stop()
+
+
+def test_finish_notice_shows_the_outputs_folder_under_home_as_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path)
+    run_id = json.loads(tools.colab_run({"path": "a.py"}))["run"]["id"]
+    run = store.update(run_id, state="succeeded", synced={"model.pt": [1, 1.0]})
+    text = tools.summary(run)
+    assert f"Outputs in ~/colab_runs/{run_id}/outputs: model.pt." in text
+    assert str(tmp_path) not in text
