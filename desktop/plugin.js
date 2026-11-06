@@ -40,6 +40,32 @@ function useWidth() {
 
 const isProgressLine = line => line.startsWith('HERMES_PROGRESS ')
 
+// The log follows its tail while you are at the bottom; scroll up to read and it stays put. The SDK's
+// LogView takes no ref, so this wraps it and drives its scroll box (the wrapper's only child).
+function FollowLog({ text }) {
+  const [wrap, setWrap] = useState(null)
+  const [stick, setStick] = useState(true)
+  const box = wrap?.firstElementChild || null
+  useEffect(() => {
+    if (!box) return undefined
+    const onScroll = () => setStick(box.scrollHeight - box.scrollTop - box.clientHeight < 32)
+    box.addEventListener('scroll', onScroll, { passive: true })
+    return () => box.removeEventListener('scroll', onScroll)
+  }, [box])
+  useEffect(() => {
+    if (box && stick) box.scrollTop = box.scrollHeight
+  }, [box, text, stick])
+  return jsx('div', {
+    ref: setWrap,
+    className: 'flex min-h-0 flex-1 flex-col',
+    children: jsx(LogView, {
+      className: 'flex-1 overflow-auto whitespace-pre-wrap break-all',
+      style: { minHeight: '10rem' },
+      children: text
+    })
+  })
+}
+
 function Meter({ fraction }) {
   const pct = Math.max(0, Math.min(1, fraction || 0)) * 100
   return jsx('div', {
@@ -172,11 +198,7 @@ function Detail({ id }) {
             className: 'flex min-h-48 min-w-0 flex-col gap-1.5',
             children: [
               jsx('div', { className: `text-xs font-medium ${muted}`, children: 'Log' }),
-              jsx(LogView, {
-                className: 'flex-1 overflow-auto whitespace-pre-wrap break-all',
-                style: { minHeight: '10rem' },
-                children: (run.log || []).filter(line => !isProgressLine(line)).join('\n') || 'No output yet.'
-              })
+              jsx(FollowLog, { text: (run.log || []).filter(line => !isProgressLine(line)).join('\n') || 'No output yet.' })
             ]
           }),
           jsxs('section', {
@@ -188,7 +210,7 @@ function Detail({ id }) {
                   jsx('div', { className: `text-xs font-medium ${muted}`, children: `Outputs (${run.outputs?.length || 0})` }),
                   ...(run.outputs || []).map(name =>
                     jsx('div', { key: name, className: 'truncate font-mono text-xs', title: name, children: name })),
-                  jsx('div', { className: `break-all text-[0.6875rem] ${muted}`, children: `${run.local_dir}/outputs` })
+                  jsx('div', { className: `break-all text-[0.6875rem] ${muted}`, children: run.outputs_dir || `${run.local_dir}/outputs` })
                 ]
               }),
               jsxs('div', {

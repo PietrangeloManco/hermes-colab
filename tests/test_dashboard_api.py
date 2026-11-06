@@ -45,3 +45,13 @@ def test_runs_detail_cancel_resume(tmp_path, monkeypatch):
     assert client.post(f"/runs/{run_id}/resume").json()["run"]["state"] == "resuming"
     assert client.get("/runs/missing").status_code == 400
     assert "token" not in json.dumps(listed).lower()
+
+
+def test_detail_shows_the_outputs_folder_under_home_as_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    client, tools = _client(tmp_path, monkeypatch)
+    (tmp_path / "a.py").write_text("print(1)")
+    run_id = json.loads(tools.colab_run({"path": "a.py"}))["run"]["id"]
+    detail = client.get(f"/runs/{run_id}").json()["run"]
+    assert detail["outputs_dir"] == f"~/colab_runs/{run_id}/outputs"
+    assert detail["local_dir"] == str(tmp_path / "colab_runs" / run_id)

@@ -56,7 +56,16 @@ async def run(run_id: str):
     data = _json(tools.colab_status({"run": run_id}))
     logs = json.loads(tools.colab_logs({"run": run_id, "lines": 200}))
     data["run"]["log"] = logs.get("lines") or []
+    data["run"]["outputs_dir"] = _display(Path(data["run"]["local_dir"]) / "outputs")
     return data
+
+
+def _display(path: Path) -> str:
+    """The folder as the user knows it: under the home directory as ``~/...`` (display only)."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)
 
 
 @router.post("/runs/{run_id}/cancel")
