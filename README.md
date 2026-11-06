@@ -47,7 +47,9 @@ How a run behaves:
   and retries with backoff (default up to 30 minutes) instead of failing.
 - **The chat hears back.** When a run ends, its summary (state, time, compute units,
   outputs) reaches the chat that started it on that chat's next turn. To have it arrive on
-  its own, as a new message even while you are away, allow the plugin to queue messages:
+  its own, as a new message even while you are away, allow the plugin to queue messages
+  (Hermes Desktop and TUI chats are reached by their session key, also after a restart;
+  messaging chats while Hermes keeps running):
 
   ```yaml
   # config.yaml

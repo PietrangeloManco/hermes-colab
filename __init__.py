@@ -68,12 +68,13 @@ class Service:
 
         self.home = home
         self.store = Store(plugin_data_dir(PLUGIN_ID) / "runs.db")
-        self.inject: Callable[[str], bool] | None = None
+        self.inject: Callable[..., bool] | None = None
         self.cwd: Callable[[], str] = os.getcwd
+        self.surface: Callable[[], str] = lambda: ""
         self.supervisor = Supervisor(self.store, settings=_settings, on_final=self._on_final)
         self.thread = SupervisorThread(self.supervisor, home_scope=home_scope)
         self.tools = Tools(store=self.store, supervisor=self.supervisor, ensure_supervisor=self.thread.ensure_running,
-                           settings=_settings, cwd=lambda: self.cwd(), env=_secret)
+                           settings=_settings, cwd=lambda: self.cwd(), env=_secret, surface=lambda: self.surface())
 
     def _on_final(self, run: dict) -> None:
         if self.inject is not None:
@@ -109,6 +110,7 @@ def register(ctx) -> None:
         return os.getcwd()
 
     svc.cwd = cwd
+    svc.surface = getattr(ctx, "session_surface", None) or svc.surface
     svc.inject = ctx.inject_message
     tools = svc.tools
 

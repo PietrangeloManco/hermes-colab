@@ -19,12 +19,13 @@ class NoTunnel:
         raise self.exc
 
 
-def _tools(tmp_path, *, env=None, tunnel=None, cwd=None):
+def _tools(tmp_path, *, env=None, tunnel=None, cwd=None, surface=""):
     store = Store(tmp_path / "runs.db")
     sup = Supervisor(store, settings=lambda: {}, tunnel=tunnel or NoTunnel(NotSignedIn("not signed in")))
     return store, sup, Tools(store=store, supervisor=sup, ensure_supervisor=lambda: None,
                              settings=lambda: {"default_accelerator": "T4", "max_upload_mb": 1},
-                             cwd=lambda: str(cwd or tmp_path), env=lambda n: (env or {}).get(n))
+                             cwd=lambda: str(cwd or tmp_path), env=lambda n: (env or {}).get(n),
+                             surface=lambda: surface)
 
 
 def test_doctor_reports_missing_client_then_sign_in(tmp_path):
@@ -106,6 +107,31 @@ def test_finish_notice_is_injected_in_the_starting_chat_context(tmp_path):
     assert seen[0][0] == "ses_abc" and "finished" in seen[0][1]
     assert store.get(run_id)["notified"] == 1
     assert tools.pending_notices("s1") == []  # not repeated on the next turn
+
+
+def test_desktop_notice_goes_to_the_session_key_even_after_a_restart(tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path, surface="desktop")
+    run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="20261106_094708_be892f"))["run"]["id"]
+    tools.contexts.clear()  # a restart loses the in-memory contexts; the Desktop route needs none
+    run = store.update(run_id, state="succeeded")
+    seen = []
+    assert tools.push_notice(run, lambda text, **kw: seen.append(kw) or True)
+    assert seen == [{"session_key": "20261106_094708_be892f"}]
+    assert store.get(run_id)["notified"] == 1
+
+
+def test_resume_from_another_chat_moves_the_notice_there(tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    store, _, tools = _tools(tmp_path, surface="telegram")
+    run_id = json.loads(tools.colab_run({"path": "a.py"}, session_id="s1"))["run"]["id"]
+    store.update(run_id, state="failed")
+    tools.surface = lambda: "desktop"
+    tools.colab_resume({"run": run_id}, session_id="s2")
+    run = store.update(run_id, state="succeeded")
+    seen = []
+    assert tools.push_notice(run, lambda text, **kw: seen.append(kw) or True)
+    assert seen == [{"session_key": "s2"}]
 
 
 def test_refused_notice_falls_back_to_next_turn(tmp_path):

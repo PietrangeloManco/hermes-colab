@@ -15,6 +15,8 @@ from .colab_api import ACCELERATORS, ColabError, NotSignedIn
 from .store import ACTIVE, FINAL, Store, new_run_id
 
 PROTECTED = (".hermes", ".ssh", ".gnupg", ".aws", ".config", ".kube", ".docker", ".local/share/keyrings")
+# Clients whose chats Hermes addresses by session key (the TUI/Desktop host of ``inject_message``).
+LOCAL_SURFACES = ("desktop", "tui")
 STATE_LABEL = {
     "queued": "queued", "waiting_gpu": "waiting for a GPU", "assigning": "requesting a runtime",
     "uploading": "uploading code", "starting": "starting", "running": "running", "resuming": "resuming",
@@ -119,16 +121,20 @@ SCHEMAS: dict[str, dict] = {
 
 class Tools:
     def __init__(self, *, store: Store, supervisor, ensure_supervisor: Callable[[], None],
-                 settings: Callable[[], dict], cwd: Callable[[], str], env: Callable[[str], str | None]):
+                 settings: Callable[[], dict], cwd: Callable[[], str], env: Callable[[str], str | None],
+                 surface: Callable[[], str] = lambda: ""):
         self.store = store
         self.supervisor = supervisor
         self.ensure_supervisor = ensure_supervisor
         self.settings = settings
         self.cwd = cwd
         self.env = env
-        # Calling chat's context per run, so the finish notice is injected for that chat through the
-        # public keyless ``ctx.inject_message`` route (in memory only; after a restart the
-        # pre_llm_call fallback delivers the summary instead).
+        # Client of the calling chat (``ctx.session_surface()``): Desktop and TUI chats get the finish
+        # notice by their session key, messaging chats through the keyless route below.
+        self.surface = surface
+        # Calling chat's context per run, so the finish notice of a messaging chat is injected for
+        # that chat through the public keyless ``ctx.inject_message`` route (in memory only; after a
+        # restart the pre_llm_call fallback delivers the summary instead).
         self.contexts: dict[str, contextvars.Context] = {}
 
     # ── helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -236,7 +242,7 @@ class Tools:
                 "requirements": [str(r) for r in args.get("requirements") or []],
                 "env": {str(k): str(v) for k, v in (args.get("env") or {}).items()},
                 "timeout_minutes": args.get("timeout_minutes"), "keep_runtime": bool(args.get("keep_runtime")),
-                "high_mem": bool(args.get("high_mem")), "source": str(source),
+                "high_mem": bool(args.get("high_mem")), "source": str(source), "surface": self._surface(),
             }
             name = str(args.get("name") or Path(entry).stem)[:60]
             run = self.store.create({"id": run_id, "name": name, "spec": spec, "local_dir": str(local),
@@ -299,7 +305,8 @@ class Tools:
         if run["state"] not in ("failed", "cancelled"):
             return _err(f"only failed or cancelled runs can be resumed (this one is {run['state']})")
         self.store.update(run["id"], state="resuming", error=None, exit_code=None, finished_at=None,
-                          endpoint=None, notified=0, session_id=session_id or run.get("session_id"))
+                          endpoint=None, notified=0, session_id=session_id or run.get("session_id"),
+                          spec={**(run.get("spec") or {}), "surface": self._surface()})
         self.store.event(run["id"], "Manual resume requested")
         self.contexts[run["id"]] = contextvars.copy_context()
         self.ensure_supervisor()
@@ -353,19 +360,33 @@ class Tools:
     def push_notice(self, run: dict, inject: Callable[..., bool]) -> bool:
         """Best effort: queue the summary on the chat that started the run.
 
-        Runs ``inject`` inside that chat's copied context, where Hermes routes a keyless
-        ``inject_message`` to the calling session. Needs
-        ``plugins.entries.hermes-colab.allow_gateway_injection: true``; without it, or when the chat
-        is gone, the summary is added to that session's next turn by the pre_llm_call hook.
+        A Desktop or TUI chat is addressed by its session key (the stored session id), which needs
+        no saved context and so also works after a restart. Any other chat gets a keyless
+        ``inject_message`` run inside its copied context, where Hermes routes it to the calling
+        session. Needs ``plugins.entries.hermes-colab.allow_gateway_injection: true``; without it,
+        or when the chat is gone, the pre_llm_call hook adds the summary to that session's next turn.
         """
         context = self.contexts.pop(run["id"], None)
-        if context is None or not self.settings().get("notify_on_finish", True):
+        if not self.settings().get("notify_on_finish", True):
             return False
         text = self.summary(run) + " (automatic notice from the hermes-colab plugin)"
+        session = run.get("session_id")
+        local = bool(session) and (run.get("spec") or {}).get("surface") in LOCAL_SURFACES
         try:
-            delivered = bool(context.run(inject, text))
+            if local:
+                delivered = bool(inject(text, session_key=session))
+            elif context is not None:
+                delivered = bool(context.run(inject, text))
+            else:
+                return False
         except Exception:
             return False
         if delivered:
             self.store.update(run["id"], notified=1)
         return delivered
+
+    def _surface(self) -> str:
+        try:
+            return str(self.surface() or "")
+        except Exception:  # outside a session (tests, probes): no surface
+            return ""
