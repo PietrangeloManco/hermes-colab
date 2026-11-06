@@ -47,6 +47,16 @@ def test_not_signed_in_fails_run_with_next_step(tmp_path):
     assert resumed["ok"] and store.get(run_id)["state"] == "resuming"
 
 
+def test_core_sign_in_hint_is_not_repeated(tmp_path):
+    (tmp_path / "a.py").write_text("print(1)")
+    core = "Not signed in to google for plugin 'hermes-colab'. Run `hermes auth add hermes-colab:google`."
+    store, sup, tools = _tools(tmp_path, tunnel=NoTunnel(NotSignedIn(core)))
+    run_id = json.loads(tools.colab_run({"path": "a.py"}))["run"]["id"]
+    sup.tick()
+    error = store.get(run_id)["error"]
+    assert error.count("hermes auth add") == 1 and ".." not in error and "colab_resume" in error
+
+
 def test_refuses_protected_directories(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".ssh").mkdir(parents=True)

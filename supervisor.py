@@ -79,8 +79,10 @@ class Supervisor:
             handler(run)
             self._unreachable.pop(run_id, None)
         except NotSignedIn as exc:
-            self._finish(run, "failed", error=f"Not signed in to Google through Hermes: {exc}. "
-                         "Run `hermes auth add hermes-colab:google` in a terminal, then colab_resume.")
+            reason = str(exc).rstrip(". ")
+            hint = "" if "hermes auth add" in reason else " Run `hermes auth add hermes-colab:google` in a terminal."
+            self._finish(run, "failed", error=f"Not signed in to Google through Hermes: {reason}.{hint} "
+                         "Then resume the run with colab_resume.")
         except TooManyRuntimes as exc:
             self._wait_gpu(run, str(exc))
         except RuntimeGone as exc:
