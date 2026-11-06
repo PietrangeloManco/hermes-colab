@@ -11,6 +11,12 @@ the last synced checkpoint**. When the run ends, the chat that started it hears 
 
 No browser tab to babysit, no copy-pasting notebooks, no lost epochs.
 
+![The Colab page in Hermes Desktop: a LoRA fine-tune on a free T4 loses its runtime after epoch 2, resumes on a fresh one from the synced checkpoint and finishes](docs/colab-run.gif)
+
+*The LoRA example on a free T4 (real run, sped up): Colab takes the runtime away after
+epoch 2, the plugin copies the newest checkpoint home, gets a fresh runtime and finishes
+epoch 3 there.*
+
 ## What it does
 
 | Tool | What for |
