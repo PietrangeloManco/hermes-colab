@@ -40,7 +40,7 @@ class PathPolicy:
         return Path(self.hermes_home()).expanduser().resolve()
 
     def private_roots(self) -> list[Path]:
-        """HERMES_HOME and the credential folders, as they resolve (a symlinked ~/.ssh counts at its target)."""
+        """HERMES_HOME and the credential folders, as they resolve (a symlinked one counts at its target)."""
         home = Path.home()
         return [self._hermes_home(), *((home / name).resolve() for name in PROTECTED)]
 
@@ -72,7 +72,7 @@ class PathPolicy:
         if self.broad(path):
             raise BundleError(f"refusing to write run files to {path}: pick a folder for this run")
         for root in self.private_roots():
-            if within(root, path):  # a symlinked ~/.ssh may point inside the run folder
+            if within(root, path):  # a symlinked credential folder may point in here
                 raise BundleError(f"refusing to write run files to {path}: it contains {root}")
         return path
 
