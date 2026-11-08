@@ -133,10 +133,16 @@ capped by `max_upload_mb` (default 512 MB) and output files above `max_sync_mb`
 ## Security and privacy
 
 - **What leaves your machine:** the files of the run (a single file plus a sibling
-  `requirements.txt`, or the project folder minus hidden folders, virtualenvs, caches,
-  symlinks and common credential files such as `.env*`, `credentials.json`,
-  `token.json`), the requirements and the non-secret `env` you pass. Folders such as
-  `~/.hermes`, `~/.ssh`, `~/.config` are refused.
+  `requirements.txt`, or the project folder minus hidden files and folders (except
+  `.python-version`), virtualenvs, caches, symlinks, hard-linked files and common
+  credential files such as `credentials.json`, `token.json`), the requirements and the
+  non-secret `env` you pass.
+  The home directory, `HERMES_HOME` and folders such as `~/.ssh`, `~/.config` (or any
+  folder containing home or `HERMES_HOME`) are refused.
+- **Where outputs land:** `<code folder>/colab_runs/<run id>/`, or an `output_dir` inside
+  the chat's working directory (unless that is the home directory or holds it) or the code
+  folder; `HERMES_HOME`, the home directory itself and the credential folders are refused,
+  also when reached through a symlink, and symlinks inside the run folder are never followed.
 - **Where it goes:** `colab.research.google.com` (assignment, keep-alive, release; with
   your Google sign-in attached by Hermes) and your runtime's Colab proxy (with the
   short-lived runtime token Colab returns, kept in memory only).

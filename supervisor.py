@@ -25,8 +25,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .bundle import zip_dir
+from .bundle import BundleError, zip_dir
 from .colab_api import ColabError, ColabTunnel, NotSignedIn, Runtime, TooManyRuntimes
+from .paths import PathPolicy, append_text, child, folder, read_bytes, write_new
 from .runtime import KernelError, RuntimeClient, RuntimeGone, RuntimeUnreachable
 from .store import ACTIVE, Store
 
@@ -45,13 +46,14 @@ class Supervisor:
                  tunnel: ColabTunnel | None = None,
                  runtime_factory: Callable[[Runtime], RuntimeClient] = RuntimeClient,
                  on_final: Callable[[dict], None] | None = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, paths: PathPolicy | None = None):
         self.store = store
         self.settings = settings
         self.tunnel = tunnel or ColabTunnel()
         self.runtime_factory = runtime_factory
         self.on_final = on_final
         self.clock = clock
+        self.paths = paths or PathPolicy()
         self._clients: dict[str, RuntimeClient] = {}
         self._keepalive: dict[str, float] = {}
         self._liveness: dict[str, float] = {}
@@ -74,10 +76,15 @@ class Supervisor:
     def step(self, run: dict) -> None:
         run_id = run["id"]
         try:
+            # Every step, so a run adopted after a restart or recorded by an older version is held to
+            # the same folder rules as a new one before anything is read or written there.
+            self.paths.check_recorded(Path(run["local_dir"]))
             self._account(run)
             handler = getattr(self, f"_on_{run['state']}")
             handler(run)
             self._unreachable.pop(run_id, None)
+        except BundleError as exc:
+            self._finish(run, "failed", error=f"Run folder refused: {exc}")
         except NotSignedIn as exc:
             reason = str(exc).rstrip(". ")
             hint = "" if "hermes auth add" in reason else " Run `hermes auth add hermes-colab:google` in a terminal."
@@ -131,10 +138,10 @@ class Supervisor:
         client = self._client(run)
         local = Path(run["local_dir"])
         run_dir = client.prepare(run["id"])
-        client.upload(f"{run_dir}/.incoming/bundle.zip", (local / "bundle.zip").read_bytes())
+        client.upload(f"{run_dir}/.incoming/bundle.zip", read_bytes(local / "bundle.zip"))
         client.unzip(f"{run_dir}/.incoming/bundle.zip", f"{run_dir}/work")
-        outputs = local / "outputs"
-        if run["attempt"] > 1 and outputs.is_dir() and any(outputs.rglob("*")):
+        outputs = folder(local, "outputs")
+        if run["attempt"] > 1 and any(outputs.iterdir()):
             data = zip_dir(outputs)
             client.upload(f"{run_dir}/.incoming/outputs.zip", data)
             restored = client.unzip(f"{run_dir}/.incoming/outputs.zip", f"{run_dir}/outputs")
@@ -239,8 +246,7 @@ class Supervisor:
     def _append_log(self, run: dict, state: Mapping[str, Any]) -> None:
         text = state.get("log") or ""
         if text:
-            with open(Path(run["local_dir"]) / "run.log", "a", encoding="utf-8") as fh:
-                fh.write(text)
+            append_text(child(Path(run["local_dir"]), "run.log"), text)
 
     def _sync(self, run: dict, client: RuntimeClient, listing: list, *, final: bool,
               now: float | None = None) -> None:
@@ -251,7 +257,7 @@ class Supervisor:
         synced: dict[str, list] = dict(run.get("synced") or {})
         seen = self._seen.setdefault(run["id"], {})
         max_bytes = int(self.settings().get("max_sync_mb", 1024)) * 1024 * 1024
-        out_dir = Path(run["local_dir"]) / "outputs"
+        local = Path(run["local_dir"])
         remote = client.run_dir(run["id"]) + "/outputs"
         changed = False
         # Oldest first: a job that writes its weights and then its progress file never has the
@@ -275,10 +281,10 @@ class Supervisor:
                     self.store.event(run["id"], f"Skipped {rel} ({size // 2**20} MB > max_sync_mb)")
                 continue
             data = client.download(f"{remote}/{rel}", size)
-            target = out_dir.joinpath(*rel_path.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
+            # No symlink planted in the run folder can redirect the write (checked per folder, link replaced).
+            target = child(local, "outputs", *rel_path.parts)
             tmp = target.with_name(target.name + ".part")
-            tmp.write_bytes(data)
+            write_new(tmp, data)
             os.replace(tmp, target)
             synced[rel] = sig
             changed = True
@@ -311,7 +317,7 @@ class Supervisor:
             self._append_log(run, state)
             self.store.update(run["id"], log_offset=state["log_offset"])
             self._sync(run, client, state.get("outputs") or [], final=True, now=state.get("now"))
-        except (RuntimeGone, RuntimeUnreachable, KernelError, OSError):
+        except (RuntimeGone, RuntimeUnreachable, KernelError, OSError, BundleError):
             return {}
         self.store.event(run["id"], "Copied the latest outputs from the reclaimed runtime")
         return state.get("status") or {}
@@ -371,12 +377,10 @@ _ERROR_LINE = re.compile(r"^\s*(\w+(Error|Exception|Interrupt)|AssertionError|Ki
 def _failure_line(log: Path) -> str:
     """The line that explains a failed job (last exception line of the log), trimmed for chat."""
     try:
-        with open(log, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, fh.tell() - 32 * 1024))
-            lines = [ln.strip() for ln in fh.read().decode("utf-8", "replace").splitlines() if ln.strip()]
-    except OSError:
+        data = read_bytes(log, limit=32 * 1024)
+    except (OSError, BundleError):
         return ""
+    lines = [ln.strip() for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
     hits = [ln for ln in lines if _ERROR_LINE.match(ln) or "out of memory" in ln]
     line = hits[-1] if hits else (lines[-1] if lines else "")
     return line[:300]

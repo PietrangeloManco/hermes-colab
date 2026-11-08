@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from .paths import PathPolicy
 from .store import Store
 from .supervisor import Supervisor, SupervisorThread
 from .tools import SCHEMAS, Tools
@@ -71,10 +72,12 @@ class Service:
         self.inject: Callable[..., bool] | None = None
         self.cwd: Callable[[], str] = os.getcwd
         self.surface: Callable[[], str] = lambda: ""
-        self.supervisor = Supervisor(self.store, settings=_settings, on_final=self._on_final)
+        paths = PathPolicy(lambda: home)
+        self.supervisor = Supervisor(self.store, settings=_settings, on_final=self._on_final, paths=paths)
         self.thread = SupervisorThread(self.supervisor, home_scope=home_scope)
         self.tools = Tools(store=self.store, supervisor=self.supervisor, ensure_supervisor=self.thread.ensure_running,
-                           settings=_settings, cwd=lambda: self.cwd(), env=_secret, surface=lambda: self.surface())
+                           settings=_settings, cwd=lambda: self.cwd(), env=_secret, surface=lambda: self.surface(),
+                           paths=paths)
 
     def _on_final(self, run: dict) -> None:
         if self.inject is not None:

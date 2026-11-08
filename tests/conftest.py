@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -19,3 +21,13 @@ def _load_package() -> None:
 
 
 _load_package()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """A synthetic home and HERMES_HOME per test: the plugin refuses the real ones (and the pytest temp
+    folder may sit inside them), and no test may touch the developer's files."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HERMES_HOME", str(home / ".hermes"))

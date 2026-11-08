@@ -12,9 +12,9 @@ from typing import Any
 
 from .bundle import BundleError, build_bundle
 from .colab_api import ACCELERATORS, ColabError, NotSignedIn
+from .paths import PathPolicy, child, excluded, folder, read_bytes, write_new
 from .store import ACTIVE, FINAL, Store, new_run_id
 
-PROTECTED = (".hermes", ".ssh", ".gnupg", ".aws", ".config", ".kube", ".docker", ".local/share/keyrings")
 # Clients whose chats Hermes addresses by session key (the TUI/Desktop host of ``inject_message``).
 LOCAL_SURFACES = ("desktop", "tui", "cli")
 PROGRESS_PREFIX = "HERMES_PROGRESS "
@@ -83,7 +83,8 @@ SCHEMAS: dict[str, dict] = {
                                  "ends (it keeps using compute units). Default false."},
                 "high_mem": {"type": "boolean", "description": "Ask for the high-RAM shape when available."},
                 "output_dir": {"type": "string", "description": "Local folder for outputs and the log; "
-                               "default ./colab_runs/<run id> next to the code."},
+                               "default ./colab_runs/<run id> next to the code. Must be inside the chat's "
+                               "working directory or the folder that holds the code."},
             },
             "required": ["path"],
         },
@@ -132,13 +133,14 @@ SCHEMAS: dict[str, dict] = {
 class Tools:
     def __init__(self, *, store: Store, supervisor, ensure_supervisor: Callable[[], None],
                  settings: Callable[[], dict], cwd: Callable[[], str], env: Callable[[str], str | None],
-                 surface: Callable[[], str] = lambda: ""):
+                 surface: Callable[[], str] = lambda: "", paths: PathPolicy | None = None):
         self.store = store
         self.supervisor = supervisor
         self.ensure_supervisor = ensure_supervisor
         self.settings = settings
         self.cwd = cwd
         self.env = env
+        self.paths = paths or PathPolicy()
         # Client of the calling chat (``ctx.session_surface()``): Desktop and TUI chats get the finish
         # notice by their session key, messaging chats through the keyless route below.
         self.surface = surface
@@ -152,11 +154,7 @@ class Tools:
         path = Path(os.path.expanduser(raw))
         if not path.is_absolute():
             path = Path(self.cwd()) / path
-        path = path.resolve()
-        home = Path.home().resolve()
-        for name in PROTECTED:
-            if path == home / name or (home / name) in path.parents:
-                raise BundleError(f"refusing to upload from {home / name}")
+        path = self.paths.check_source(path)
         if not path.exists():
             raise BundleError(f"{path} does not exist")
         return path
@@ -239,14 +237,14 @@ class Tools:
             if accelerator not in ACCELERATORS:
                 return _err(f"unknown accelerator {accelerator}")
             max_bytes = int(settings.get("max_upload_mb", 512)) * 2**20
-            data, files = build_bundle(source, entry, max_bytes=max_bytes)
+            data, files = build_bundle(source, entry, max_bytes=max_bytes,
+                                       skip=excluded(self.paths.private_roots()))
             run_id = new_run_id()
-            base = source.parent if source.is_file() else source
-            local = Path(args["output_dir"]).expanduser() if args.get("output_dir") else base / "colab_runs" / run_id
-            if not local.is_absolute():
-                local = Path(self.cwd()) / local
-            (local / "outputs").mkdir(parents=True, exist_ok=True)
-            (local / "bundle.zip").write_bytes(data)
+            code_dir = source.parent if source.is_file() else source
+            local = self.paths.output_dir(args.get("output_dir"), code_dir=code_dir, cwd=Path(self.cwd()),
+                                          run_id=run_id)
+            folder(local, "outputs")
+            write_new(child(local, "bundle.zip"), data)
             spec = {
                 "entry": entry, "args": [str(a) for a in args.get("args") or []],
                 "requirements": [str(r) for r in args.get("requirements") or []],
@@ -283,15 +281,18 @@ class Tools:
         if run is None:
             return _err("no such run")
         lines = max(1, min(int(args.get("lines") or 60), 400))
-        log = Path(run["local_dir"]) / "run.log"
-        if not log.is_file():
+        try:
+            log = self.paths.check_recorded(Path(run["local_dir"])) / "run.log"
+        except BundleError as exc:
+            return _err(str(exc))
+        if log.is_symlink() or not log.is_file():
             return _ok(id=run["id"], state=run["state"], lines=[], note="no output yet")
-        with open(log, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - 256 * 1024))
-            tail = [ln for ln in fh.read().decode("utf-8", "replace").splitlines()
-                    if not ln.startswith(PROGRESS_PREFIX)][-lines:]  # progress is in colab_status
+        try:
+            data = read_bytes(log, limit=256 * 1024)
+        except BundleError as exc:
+            return _err(str(exc))
+        tail = [ln for ln in data.decode("utf-8", "replace").splitlines()
+                if not ln.startswith(PROGRESS_PREFIX)][-lines:]  # progress is in colab_status
         return _ok(id=run["id"], state=run["state"], lines=tail)
 
     def colab_cancel(self, args: dict, **_: Any) -> str:
@@ -315,6 +316,10 @@ class Tools:
             return _err("no such run")
         if run["state"] not in ("failed", "cancelled"):
             return _err(f"only failed or cancelled runs can be resumed (this one is {run['state']})")
+        try:
+            self.paths.check_recorded(Path(run["local_dir"]))
+        except BundleError as exc:
+            return _err(str(exc))
         self.store.update(run["id"], state="resuming", error=None, exit_code=None, finished_at=None,
                           endpoint=None, notified=0, session_id=session_id or run.get("session_id"),
                           spec={**(run.get("spec") or {}), "surface": self._surface()})
